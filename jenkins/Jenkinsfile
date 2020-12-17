@@ -1,0 +1,79 @@
+def label = "worker-${UUID.randomUUID().toString()}"
+
+def clustername = "kubernetes"
+def namespace = "tiller"
+
+def targetVersion = null
+
+properties([
+  parameters([
+    string(name: 'RELEASE', defaultValue: 'latest', description: 'Enter the desired release version to be deployed.', trim: true)
+  ])
+])
+
+podTemplate(cloud: clustername,
+            namespace: namespace,
+            containers: [
+               containerTemplate(name: 'helm', image: 'venkateshpakanati/helm_push:1.3',command: 'cat'
+              ,ttyEnabled: true,
+             // workingDir: workingdir,
+              alwaysPullImage: false)
+            ],
+            volumes: [
+              emptyDirVolume(mountPath: '/home/groot/helm/repository/cache', memory: false)
+            ]            
+            ) {
+                node(POD_LABEL) {
+                    stage('Checkout Code') {
+       milestone ()
+        def myRepo = checkout scm
+        def gitCommit = myRepo.GIT_COMMIT
+        def gitLocalBranch = myRepo.GIT_LOCAL_BRANCH 
+        def gitPrevCommit = myRepo.GIT_PREVIOUS_COMMIT
+        def gitPrevSuccessCommit = myRepo.GIT_PREVIOUS_SUCCESSFUL_COMMIT
+        def gitBranch = myRepo.GIT_BRANCH
+        def shortGitCommit = "${gitCommit[0..10]}"
+        def previousGitCommit = sh(script: "git rev-parse ${gitCommit}~", returnStdout: true)
+        println "${gitCommit}   ${gitBranch}  ${shortGitCommit}  ${previousGitCommit}   ${gitLocalBranch}  ${gitPrevCommit} ${gitPrevSuccessCommit}"
+        targetVersion = params.RELEASE
+        sh "ls -lat"
+    }
+    
+    stage('load properties') {
+      milestone()
+      props = readProperties file:'jenkins/jenkins-release.properties'
+    //   if (env.BRANCH_NAME == 'develop') {
+    //      props = readProperties file:'jenkins-develop.properties'
+    //   } else if (env.BRANCH_NAME =~ /^(release|hotfix)/) {
+    //      props = readProperties file:'jenkins/jenkins-release.properties'
+    //   } else {
+    //      props = readProperties file:'jenkins-default.properties'
+    //   }  
+
+            if (params.RELEASE == null || params.RELEASE.contains('latest')) {
+              def mavenPom = readMavenPom file: 'pom.xml'
+              def pomVersion = mavenPom.properties['global.version']
+              versionNumber = "${pomVersion}"
+            } else {
+              targetVersion = params.RELEASE
+            }
+     
+    }
+
+ 
+  
+                     stage('Deploy') {
+                          milestone()
+                          container('helm') {
+                            def helmchartAppVersion = targetVersion
+                            sh '''
+                              helm repo add helm http://172.42.42.104:8081/artifactory/helm --username admin --password AP9YMHJpDaRrnUzzyY7e452G742
+                              helm repo update --debug
+                            '''      
+                            sh "helm upgrade projectchart http://172.42.42.104:8081/artifactory/helm/projectchart-${helmchartAppVersion}.tgz  --username admin --password AP9YMHJpDaRrnUzzyY7e452G742 --tiller-namespace tiller --namespace tiller --version ${helmchartAppVersion} --install --force --debug"
+                      
+                          }
+                      }
+
+ }
+}
